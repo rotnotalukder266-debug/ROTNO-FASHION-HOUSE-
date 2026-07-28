@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Rotno Fashion House — Admin</title>
+<meta name="robots" content="noindex, nofollow" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Hind Siliguri',sans-serif;background:#FFF8ED;color:#2A2321;}
+  .display{font-family:'Baloo 2',sans-serif;}
+  .brand-bg{background:#6B1E23;}
+  .brand-text{color:#6B1E23;}
+  .gold-bg{background:#D4A017;}
+  .hide{display:none !important;}
+</style>
+</head>
+<body>
+
+<script src="config.js"></script>
+
+<!-- ================= LOGIN GATE ================= -->
+<div id="loginGate" class="min-h-screen flex items-center justify-center p-6">
+  <div class="w-full max-w-sm bg-white rounded-2xl shadow border p-6">
+    <div class="flex items-center gap-2 mb-4 brand-text">
+      🔒 <h2 class="display font-bold text-lg">অ্যাডমিন লগইন — Rotno Fashion House</h2>
+    </div>
+    <input id="pwInput" type="password" placeholder="পাসওয়ার্ড দিন" class="w-full border rounded-lg px-3 py-2 mb-2 text-sm" />
+    <p id="pwError" class="text-red-600 text-xs mb-2 hide">ভুল পাসওয়ার্ড</p>
+    <button onclick="tryLogin()" class="w-full brand-bg text-white rounded-lg py-2 font-semibold text-sm">লগইন</button>
+  </div>
+</div>
+
+<!-- ================= ADMIN PANEL ================= -->
+<div id="adminPanel" class="hide max-w-3xl mx-auto p-4">
+  <div class="flex items-center gap-2 mb-4">
+    <div class="w-9 h-9 rounded-full gold-bg flex items-center justify-center display font-extrabold brand-text">R</div>
+    <h1 class="display font-bold text-lg brand-text">Rotno Fashion House — অ্যাডমিন প্যানেল</h1>
+  </div>
+
+  <div id="tabBar" class="flex gap-2 overflow-x-auto mb-4"></div>
+  <div id="tabContent"></div>
+</div>
+
+<div id="toast" class="hide fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-[#2A2321] text-white text-sm px-4 py-2 rounded-full shadow-lg"></div>
+
+<script>
+const ADMIN_PASSWORD = "rotno2026"; // এখানে বদলে নিজের পাসওয়ার্ড বসান
+const CATEGORIES = ["বাচ্চাদের পোশাক","কাপল সেট","ফ্যামিলি সেট","ভাই-বোন সেট","সিঙ্গেল"];
+let products = [];
+let orders = [];
+let withdrawals = [];
+let coupon = null;
+let accounting = [];
+let currentTab = 'hisab';
+
+function taka(n){ return "৳" + Number(n||0).toLocaleString("en-BD"); }
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.remove('hide');
+  setTimeout(()=>t.classList.add('hide'), 2600);
+}
+
+function tryLogin(){
+  const val = document.getElementById('pwInput').value;
+  if(val === ADMIN_PASSWORD){
+    document.getElementById('loginGate').classList.add('hide');
+    document.getElementById('adminPanel').classList.remove('hide');
+    initAdmin();
+  } else {
+    document.getElementById('pwError').classList.remove('hide');
+  }
+}
+
+/* কস্ট প্রাইস থেকে সাজেস্টেড বিক্রয় মূল্য অটো-ক্যালকুলেট */
+function suggestPrice(cost){
+  const c = Number(cost)||0;
+  if(c<=0) return 0;
+  let factor, add;
+  if(c<=180){factor=1.9; add=40;}
+  else if(c<=250){factor=1.75; add=30;}
+  else if(c<=320){factor=1.6; add=30;}
+  else {factor=1.6; add=60;}
+  return Math.round((c*factor+add)/10)*10;
+}
+
+async function initAdmin(){
+  renderTabs();
+  await loadAll();
+  renderTab();
+}
+
+async function loadAll(){
+  const [{data:p}, {data:o}, {data:w}, {data:c}, {data:a}] = await Promise.all([
+    supabase.from('products').select('*, reviews(*)').order('created_at',{ascending:false}),
+    supabase.from('orders').select('*').order('created_at',{ascending:false}),
+    supabase.from('withdrawals').select('*').order('created_at',{ascending:false}),
+    supabase.from('coupon_config').select('*').eq('id',1).single(),
+    supabase.from('accounting_entries').select('*').order('created_at',{ascending:false}),
+  ]);
+  products = p||[]; orders = o||[]; withdrawals = w||[]; coupon = c; accounting = a||[];
+}
+
+function renderTabs(){
+  const tabs = [
+    {key:'hisab', label:'📊 হিসাব'},
+    {key:'products', label:'📦 প্রোডাক্ট'},
+    {key:'orders', label:'🛍️ অর্ডার'},
+    {key:'coupon', label:'🏷️ কুপন'},
+    {key:'withdrawals', label:'💼 উইথড্র'},
+  ];
+  document.getElementById('tabBar').innerHTML = tabs.map(t=>`
+    <button onclick="switchTab('${t.key}')" class="tab-btn whitespace-nowrap px-3 py-1.5 rounded-full text-sm border ${currentTab===t.key?'brand-bg text-white border-transparent':'bg-white brand-text border-stone-200'}">${t.label}</button>
+  `).join('');
+}
+function switchTab(key){ currentTab = key; renderTabs(); renderTab(); }
+
+function renderTab(){
+  const c = document.getElementById('tabContent');
+  if(currentTab==='hisab') c.innerHTML = hisabHtml();
+  else if(currentTab==='products') c.innerHTML = productsHtml();
+  else if(currentTab==='orders') c.innerHTML = ordersHtml();
+  else if(currentTab==='coupon') c.innerHTML = couponHtml();
+  else if(currentTab==='withdrawals') c.innerHTML = withdrawalsHtml();
+  if(currentTab==='products') attachProductFormEvents();
+}
+
+/* ================= হিসাব ================= */
+function hisabHtml(){
+  const totalRevenue = orders.reduce((s,o)=>s+Number(o.total),0);
+  const totalCashback = orders.reduce((s,o)=>s+Number(o.cashback_from_coupon||0),0);
+  const totalCOGS = products.reduce((s,p)=>s+(Number(p.cost)||0)*(p.sold||0),0);
+  const totalExpenses = accounting.filter(a=>a.entry_type==='expense').reduce((s,a)=>s+Number(a.amount),0);
+  const totalStock = products.reduce((s,p)=>s+(p.stock||0),0);
+  const netProfit = totalRevenue - totalCOGS - totalExpenses - totalCashback;
+  const bestSellers = [...products].sort((a,b)=>(b.sold||0)-(a.sold||0)).slice(0,5);
+  const purchases = accounting.filter(a=>a.entry_type==='purchase');
+  const expenses = accounting.filter(a=>a.entry_type==='expense');
+
+  return `
+    <div class="grid grid-cols-2 gap-2 mb-4">
+      ${statCard('মোট বিক্রি', taka(totalRevenue))}
+      ${statCard('নিট লাভ', taka(netProfit), true)}
+      ${statCard('মোট স্টক (পিস)', totalStock)}
+      ${statCard('মোট ক্যাশব্যাক দেওয়া', taka(totalCashback))}
+      ${statCard('পণ্যের কস্ট (বিক্রিত)', taka(totalCOGS))}
+      ${statCard('অন্যান্য খরচ', taka(totalExpenses))}
+    </div>
+    <div class="bg-white border rounded-2xl p-3 mb-4">
+      <h3 class="font-semibold text-sm mb-2">🏆 বেস্ট সেলার</h3>
+      ${bestSellers.map(p=>`<div class="flex justify-between text-sm py-1 border-b last:border-0"><span class="line-clamp-1">${p.name}</span><span class="font-semibold">${p.sold||0} পিস</span></div>`).join('') || '<p class="text-sm text-stone-400">এখনো কোনো বিক্রি নেই</p>'}
+    </div>
+    <div class="bg-white border rounded-2xl p-3 mb-4">
+      <h3 class="font-semibold text-sm mb-2">📦 নতুন পণ্য ক্রয় এন্ট্রি (স্টক যোগ হবে)</h3>
+      <div class="grid grid-cols-2 gap-2">
+        <select id="purchaseProduct" class="border rounded-lg px-2 py-1.5 text-sm col-span-2">
+          ${products.map(p=>`<option value="${p.id}">${p.name}</option>`).join('')}
+        </select>
+        <input id="purchaseQty" type="number" placeholder="কত পিস কিনলেন" class="border rounded-lg px-2 py-1.5 text-sm" />
+        <input id="purchaseCost" type="number" placeholder="প্রতি পিস কস্ট" class="border rounded-lg px-2 py-1.5 text-sm" />
+      </div>
+      <button onclick="addPurchase()" class="w-full brand-bg text-white rounded-lg py-2 text-sm font-semibold mt-2">এন্ট্রি যোগ করুন</button>
+      <div class="mt-2 max-h-32 overflow-y-auto text-xs space-y-1">
+        ${purchases.slice(0,8).map(e=>`<div class="flex justify-between text-stone-500"><span>${e.entry_date} · ${products.find(p=>p.id===e.product_id)?.name||'?'}</span><span>${e.qty} পিস × ${taka(e.unit_cost)}</span></div>`).join('')}
+      </div>
+    </div>
+    <div class="bg-white border rounded-2xl p-3">
+      <h3 class="font-semibold text-sm mb-2">💸 অন্যান্য খরচ (অ্যাড, প্যাকেজিং ইত্যাদি)</h3>
+      <div class="grid grid-cols-2 gap-2">
+        <input id="expenseNote" placeholder="খরচের বিবরণ" class="border rounded-lg px-2 py-1.5 text-sm" />
+        <input id="expenseAmount" type="number" placeholder="টাকার পরিমাণ" class="border rounded-lg px-2 py-1.5 text-sm" />
+      </div>
+      <button onclick="addExpense()" class="w-full brand-bg text-white rounded-lg py-2 text-sm font-semibold mt-2">খরচ যোগ করুন</button>
+      <div class="mt-2 max-h-32 overflow-y-auto text-xs space-y-1">
+        ${expenses.slice(0,8).map(e=>`<div class="flex justify-between text-stone-500"><span>${e.entry_date} · ${e.note}</span><span>${taka(e.amount)}</span></div>`).join('')}
+      </div>
+    </div>
+  `;
+}
+function statCard(label, value, highlight){
+  return `<div class="rounded-xl p-3 border ${highlight?'brand-bg text-white border-transparent':'bg-white'}">
+    <p class="text-[11px] ${highlight?'text-amber-100':'text-stone-500'}">${label}</p>
+    <p class="display font-bold text-lg">${value}</p>
+  </div>`;
+}
+async function addPurchase(){
+  const productId = document.getElementById('purchaseProduct').value;
+  const qty = Number(document.getElementById('purchaseQty').value);
+  const unitCost = Number(document.getElementById('purchaseCost').value);
+  if(!productId || !qty || !unitCost) return;
+  await supabase.from('accounting_entries').insert({entry_type:'purchase', product_id:productId, qty, unit_cost:unitCost, amount: qty*unitCost});
+  const p = products.find(x=>x.id===productId);
+  await supabase.from('products').update({stock:(p.stock||0)+qty, cost:unitCost}).eq('id', productId);
+  showToast('এন্ট্রি যোগ হয়েছে ও স্টক আপডেট হয়েছে');
+  await loadAll(); renderTab();
+}
+async function addExpense(){
+  const note = document.getElementById('expenseNote').value.trim();
+  const amount = Number(document.getElementById('expenseAmount').value);
+  if(!note || !amount) return;
+  await supabase.from('accounting_entries').insert({entry_type:'expense', note, amount});
+  showToast('খরচ যোগ হয়েছে');
+  await loadAll(); renderTab();
+}
+
+/* ================= প্রোডাক্ট ================= */
+let editingProductId = null;
+let priceManuallySet = false;
+
+function productsHtml(){
+  return `
+    <div class="bg-white border rounded-2xl p-3 mb-4">
+      <h3 class="font-semibold text-sm mb-2">${editingProductId?'প্রোডাক্ট এডিট করুন':'নতুন প্রোডাক্ট যোগ করুন'}</h3>
+      <div class="space-y-2">
+        <input id="pfName" placeholder="প্রোডাক্টের নাম" class="w-full border rounded-lg px-3 py-2 text-sm" />
+        <select id="pfCategory" class="w-full border rounded-lg px-3 py-2 text-sm">
+          ${CATEGORIES.map(c=>`<option>${c}</option>`).join('')}
+        </select>
+        <div class="grid grid-cols-3 gap-2">
+          <input id="pfCost" type="number" placeholder="কস্ট প্রাইস" class="border rounded-lg px-2 py-2 text-sm" />
+          <input id="pfPrice" type="number" placeholder="বিক্রয় মূল্য" class="border rounded-lg px-2 py-2 text-sm" />
+          <input id="pfStock" type="number" placeholder="স্টক (পিস)" class="border rounded-lg px-2 py-2 text-sm" />
+        </div>
+        <div id="suggestionBox" class="hide bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs flex items-center justify-between">
+          <span id="suggestionText" class="text-amber-800"></span>
+          <button onclick="applySuggestion()" class="text-amber-800 underline font-semibold whitespace-nowrap ml-2">সাজেশন বসান</button>
+        </div>
+        <input id="pfImageUrl" placeholder="ছবির লিংক (URL)" class="w-full border rounded-lg px-3 py-2 text-sm" />
+        <p class="text-xs text-stone-400">অথবা সরাসরি ছবি আপলোড করুন:</p>
+        <input id="pfImageFile" type="file" accept="image/*" class="w-full text-sm" />
+        <textarea id="pfDesc" placeholder="বিবরণ (সাইজ, কালার ইত্যাদি)" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm"></textarea>
+        <div class="flex gap-2">
+          <button onclick="saveProduct()" class="flex-1 brand-bg text-white rounded-lg py-2 text-sm font-semibold">${editingProductId?'আপডেট করুন':'যোগ করুন'}</button>
+          ${editingProductId?`<button onclick="cancelEdit()" class="px-4 bg-stone-200 rounded-lg text-sm">বাতিল</button>`:''}
+        </div>
+      </div>
+    </div>
+    <div class="space-y-2">
+      ${products.map(p=>`
+        <div class="bg-white border rounded-xl p-2.5 flex gap-2 items-center">
+          <img src="${p.image||'https://placehold.co/100x100?text=No+Image'}" class="w-12 h-12 rounded-lg object-cover" />
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-semibold line-clamp-1">${p.name}</p>
+            <p class="text-xs text-stone-500">${taka(p.price)} (কস্ট ${taka(p.cost)}, লাভ ${taka(p.price-(p.cost||0))}) · স্টক: ${p.stock} · বিক্রি: ${p.sold||0}</p>
+          </div>
+          <button onclick="editProduct('${p.id}')" class="p-1.5 brand-text">✏️</button>
+          <button onclick="deleteProduct('${p.id}')" class="p-1.5 text-red-500">🗑️</button>
+        </div>`).join('') || '<p class="text-sm text-stone-400">এখনো কোনো প্রোডাক্ট যোগ হয়নি</p>'}
+    </div>
+  `;
+}
+
+function attachProductFormEvents(){
+  const costEl = document.getElementById('pfCost');
+  const priceEl = document.getElementById('pfPrice');
+  if(!costEl) return;
+  costEl.addEventListener('input', ()=>{
+    const s = suggestPrice(costEl.value);
+    if(!priceManuallySet) priceEl.value = s || '';
+    updateSuggestionBox();
+  });
+  priceEl.addEventListener('input', ()=>{ priceManuallySet = true; updateSuggestionBox(); });
+  updateSuggestionBox();
+}
+function updateSuggestionBox(){
+  const costEl = document.getElementById('pfCost');
+  const priceEl = document.getElementById('pfPrice');
+  const box = document.getElementById('suggestionBox');
+  const text = document.getElementById('suggestionText');
+  const s = suggestPrice(costEl.value);
+  if(s>0){
+    box.classList.remove('hide');
+    const diffNote = priceManuallySet && Number(priceEl.value)!==s ? ' — আপনি ম্যানুয়ালি বদলেছেন' : '';
+    text.innerHTML = `🧮 সাজেস্টেড বিক্রয় মূল্য: <b>${taka(s)}</b> (কস্ট থেকে অটো-ক্যালকুলেট)${diffNote}`;
+  } else {
+    box.classList.add('hide');
+  }
+}
+function applySuggestion(){
+  priceManuallySet = false;
+  const costEl = document.getElementById('pfCost');
+  document.getElementById('pfPrice').value = suggestPrice(costEl.value) || '';
+  updateSuggestionBox();
+}
+
+function editProduct(id){
+  const p = products.find(x=>x.id===id);
+  editingProductId = id;
+  priceManuallySet = true;
+  renderTab();
+  document.getElementById('pfName').value = p.name;
+  document.getElementById('pfCategory').value = p.category;
+  document.getElementById('pfCost').value = p.cost;
+  document.getElementById('pfPrice').value = p.price;
+  document.getElementById('pfStock').value = p.stock;
+  document.getElementById('pfImageUrl').value = p.image || '';
+  document.getElementById('pfDesc').value = p.description || '';
+}
+function cancelEdit(){ editingProductId=null; priceManuallySet=false; renderTab(); }
+
+async function saveProduct(){
+  const name = document.getElementById('pfName').value.trim();
+  const category = document.getElementById('pfCategory').value;
+  const cost = Number(document.getElementById('pfCost').value)||0;
+  const price = Number(document.getElementById('pfPrice').value)||0;
+  const stock = Number(document.getElementById('pfStock').value)||0;
+  let image = document.getElementById('pfImageUrl').value.trim();
+  const file = document.getElementById('pfImageFile').files[0];
+  const description = document.getElementById('pfDesc').value.trim();
+  if(!name || !price){ showToast('নাম ও দাম দিন'); return; }
+
+  if(file){
+    const path = `${Date.now()}_${file.name}`;
+    const {error: upErr} = await supabase.storage.from('product-images').upload(path, file);
+    if(!upErr){
+      const {data} = supabase.storage.from('product-images').getPublicUrl(path);
+      image = data.publicUrl;
+    }
+  }
+
+  if(editingProductId){
+    await supabase.from('products').update({name, category, cost, price, stock, image, description}).eq('id', editingProductId);
+  } else {
+    await supabase.from('products').insert({name, category, cost, price, stock, image, description, sold:0});
+  }
+  editingProductId = null; priceManuallySet = false;
+  showToast('সেভ হয়েছে');
+  await loadAll(); renderTab();
+}
+async function deleteProduct(id){
+  await supabase.from('products').delete().eq('id', id);
+  showToast('ডিলিট হয়েছে');
+  await loadAll(); renderTab();
+}
+
+/* ================= অর্ডার ================= */
+function ordersHtml(){
+  return `<div class="space-y-2">
+    ${orders.map(o=>`
+      <div class="bg-white border rounded-xl p-3">
+        <div class="flex justify-between text-sm"><span class="font-semibold">#${o.id.slice(0,8)} · ${o.customer_name}</span><span class="font-semibold">${taka(o.total)}</span></div>
+        <p class="text-xs text-stone-500">${o.phone} · ${o.address}</p>
+        <p class="text-xs text-stone-400 mt-1">${(o.items||[]).map(i=>`${i.name} x${i.qty}`).join(', ')}</p>
+        <select onchange="updateOrderStatus('${o.id}', this.value)" class="mt-2 border rounded-lg px-2 py-1 text-xs">
+          ${['পেন্ডিং','প্রসেসিং','ডেলিভারড','বাতিল'].map(s=>`<option ${o.status===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+      </div>`).join('') || '<p class="text-sm text-stone-400">এখনো কোনো অর্ডার আসেনি</p>'}
+  </div>`;
+}
+async function updateOrderStatus(id, status){
+  await supabase.from('orders').update({status}).eq('id', id);
+  showToast('স্ট্যাটাস আপডেট হয়েছে');
+  await loadAll();
+}
+
+/* ================= কুপন ================= */
+function couponHtml(){
+  const c = coupon || {code:'', min_order:550, cashback:50, active:true, note:''};
+  return `
+    <div class="bg-white border rounded-2xl p-3 space-y-2">
+      <h3 class="font-semibold text-sm mb-1">কুপন ক্যাম্পেইন সেটিংস</h3>
+      <input id="cCode" value="${c.code}" placeholder="কুপন কোড" class="w-full border rounded-lg px-3 py-2 text-sm uppercase" />
+      <div class="grid grid-cols-2 gap-2">
+        <input id="cMin" type="number" value="${c.min_order}" placeholder="মিনিমাম অর্ডার" class="border rounded-lg px-2 py-2 text-sm" />
+        <input id="cCashback" type="number" value="${c.cashback}" placeholder="ক্যাশব্যাক" class="border rounded-lg px-2 py-2 text-sm" />
+      </div>
+      <textarea id="cNote" rows="2" class="w-full border rounded-lg px-3 py-2 text-sm">${c.note||''}</textarea>
+      <label class="flex items-center gap-2 text-sm"><input id="cActive" type="checkbox" ${c.active?'checked':''} /> ক্যাম্পেইন চালু আছে</label>
+      <button onclick="saveCoupon()" class="w-full brand-bg text-white rounded-lg py-2 text-sm font-semibold">সেভ করুন</button>
+    </div>`;
+}
+async function saveCoupon(){
+  const payload = {
+    id: 1,
+    code: document.getElementById('cCode').value.trim().toUpperCase(),
+    min_order: Number(document.getElementById('cMin').value),
+    cashback: Number(document.getElementById('cCashback').value),
+    note: document.getElementById('cNote').value.trim(),
+    active: document.getElementById('cActive').checked,
+  };
+  await supabase.from('coupon_config').upsert(payload);
+  showToast('কুপন সেভ হয়েছে');
+  await loadAll(); renderTab();
+}
+
+/* ================= উইথড্র ================= */
+function withdrawalsHtml(){
+  return `<div class="space-y-2">
+    ${withdrawals.map(w=>`
+      <div class="bg-white border rounded-xl p-3">
+        <div class="flex justify-between text-sm"><span class="font-semibold">${w.phone}</span><span class="font-semibold">${taka(w.amount)}</span></div>
+        <p class="text-xs text-stone-500">${w.method}: ${w.number}</p>
+        <div class="flex items-center justify-between mt-2">
+          <span class="text-xs font-semibold" style="color:${w.status==='পেন্ডিং'?'#b45309':w.status==='পরিশোধিত'?'#059669':'#dc2626'}">${w.status}</span>
+          ${w.status==='পেন্ডিং'?`
+            <div class="flex gap-2">
+              <button onclick="setWithdrawStatus('${w.id}','পরিশোধিত')" class="text-xs bg-emerald-600 text-white px-2 py-1 rounded-lg">পাঠানো হয়েছে</button>
+              <button onclick="setWithdrawStatus('${w.id}','বাতিল', '${w.phone}', ${w.amount})" class="text-xs bg-red-500 text-white px-2 py-1 rounded-lg">বাতিল</button>
+            </div>`:''}
+        </div>
+      </div>`).join('') || '<p class="text-sm text-stone-400">কোনো উইথড্র রিকোয়েস্ট নেই</p>'}
+  </div>`;
+}
+async function setWithdrawStatus(id, status, phone, amount){
+  await supabase.from('withdrawals').update({status}).eq('id', id);
+  if(status==='বাতিল' && phone){
+    let {data:w} = await supabase.from('wallets').select('*').eq('phone',phone).single();
+    if(w){
+      await supabase.from('wallets').update({balance: w.balance+Number(amount)}).eq('phone', phone);
+      await supabase.from('wallet_transactions').insert({phone, type:'credit', amount, reason:'উইথড্র বাতিল - টাকা ফেরত'});
+    }
+  }
+  showToast('স্ট্যাটাস আপডেট হয়েছে');
+  await loadAll(); renderTab();
+}
+</script>
+</body>
+</html>
